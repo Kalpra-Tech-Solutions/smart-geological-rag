@@ -19,6 +19,6 @@ jobs:
       run: docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
        
     - name: Build the Docker image
-      run: docker build -t sandeshjain/mlproject .
+      run: docker build -t sandeshjain/smart_geological_rag .
     - name: Push to Dockerhub
-      run: docker push sandeshjain/mlproject:latest
+      run: docker push sandeshjain/smart_geological_rag:latest
