@@ -1,0 +1,20 @@
+streamlit==1.31.0
+agno
+groq==0.4.2
+lancedb==0.5.7
+pandas==2.1.4
+openpyxl==3.1.2
+pymupdf4llm
+pymupdf4llm
+python-docx==0.8.11
+pillow==10.2.0
+pypdf==3.17.4
+duckduckgo-search==4.1.1
+huggingface-hub==0.20.3
+opencv-python==4.9.0.80
+python-dotenv==1.0.0
+numpy==1.24.4
+pyarrow==15.0.0
+sentence-transformers==2.2.2
+requests==2.31.0
+-e .
