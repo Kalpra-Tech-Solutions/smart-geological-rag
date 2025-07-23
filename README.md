@@ -14,13 +14,12 @@ A multimodal AI system for analyzing geological documents, well logs, and format
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-repo/smart-geological-rag.git
+    git clone https:
     cd smart-geological-rag
     ```
 
 2.  **Set up API Keys:**
-    - Rename `.env.example` to `.env`.
-    - Add your Groq and HuggingFace API keys to the `.env` file.
+    -     - Add your Groq and HuggingFace API keys to the `.env` file.
 
 3.  **Run with Docker:**
     ```bash
