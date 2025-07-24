@@ -3,7 +3,7 @@ import pandas as pd
 import os
 from io import BytesIO
 from PIL import Image
-import fitz  # PyMuPDF
+import fitz # PyMuPDF
 import pymupdf4llm
 from typing import List, Dict, Any
 import tempfile
@@ -24,6 +24,10 @@ class PureLLMFileProcessor:
         Config.ensure_directories()
         Config.cleanup_temp_directory()
         
+        # Groq vision API limits
+        self.MAX_PIXELS = 33177600  # Groq's pixel limit
+        self.MAX_DIMENSION = 8192   # Maximum width or height
+        
         self.supported_formats = {
             'pdf': self.process_pdf_with_heavy_vision,
             'csv': self.process_csv_with_llm,
@@ -38,80 +42,123 @@ class PureLLMFileProcessor:
             'tiff': self.process_tiff_with_vision,
             'tif': self.process_tiff_with_vision
         }
-    
+
     def encode_image_to_base64(self, image_data: bytes) -> str:
         """Convert image bytes to base64 string"""
         return base64.b64encode(image_data).decode('utf-8')
-    
+
+    def resize_image_if_needed(self, image_data: bytes) -> bytes:
+        """Resize image if it exceeds Groq's limits"""
+        try:
+            # Open image to check dimensions
+            image = Image.open(BytesIO(image_data))
+            width, height = image.size
+            total_pixels = width * height
+            
+            # Check if resizing is needed
+            if total_pixels <= self.MAX_PIXELS and width <= self.MAX_DIMENSION and height <= self.MAX_DIMENSION:
+                return image_data
+            
+            # Calculate scaling factor
+            if total_pixels > self.MAX_PIXELS:
+                scale_factor = (self.MAX_PIXELS / total_pixels) ** 0.5
+            else:
+                scale_factor = min(self.MAX_DIMENSION / width, self.MAX_DIMENSION / height)
+            
+            # Apply a safety margin
+            scale_factor *= 0.95
+            
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
+            
+            # Resize image
+            resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Convert back to bytes
+            output_buffer = BytesIO()
+            if image.mode in ['RGBA', 'LA']:
+                resized_image = resized_image.convert('RGB')
+            resized_image.save(output_buffer, format='PNG', optimize=True)
+            
+            st.info(f"🔄 Resized image from {width}x{height} ({total_pixels:,} pixels) to {new_width}x{new_height} ({new_width*new_height:,} pixels)")
+            
+            return output_buffer.getvalue()
+            
+        except Exception as e:
+            st.warning(f"⚠️ Could not resize image: {e}. Using original.")
+            return image_data
+
     def advanced_vision_analysis(self, image_data: bytes, context: str = "", analysis_type: str = "comprehensive") -> Dict[str, Any]:
         """Advanced LLM vision analysis with specialized prompting"""
         try:
-            base64_image = self.encode_image_to_base64(image_data)
-            
+            # Resize image if needed to meet Groq's limits
+            processed_image_data = self.resize_image_if_needed(image_data)
+            base64_image = self.encode_image_to_base64(processed_image_data)
+
             # Advanced geological vision prompt
             vision_prompt = f"""
-            You are an expert geological analyst with decades of experience in well log interpretation, formation analysis, and petroleum geology.
-            
-            Analyze this geological document image with EXTREME DETAIL and PRECISION. Extract EVERY piece of information visible.
-            
-            CRITICAL ANALYSIS REQUIREMENTS:
-            
-            1. **WELL IDENTIFICATION DATA**:
-               - Extract ALL well names, API numbers, permit numbers
-               - Identify operator/company names with complete details
-               - Find location information (county, state, country, coordinates)
-               - Extract lease names, section/township/range data
-               
-            2. **TECHNICAL WELL DATA**:
-               - Total depth (TD), measured depth (MD), true vertical depth (TVD)
-               - Spud date, completion date, first production date
-               - Well type (vertical, horizontal, deviated)
-               - Casing programs, completion details
-               
-            3. **FORMATION & GEOLOGICAL DATA**:
-               - Formation names and tops with exact depths
-               - Lithology descriptions and interpretations
-               - Stratigraphic correlations and sequences
-               - Geological age assignments
-               
-            4. **LOG & PETROPHYSICAL DATA**:
-               - Log types run (GR, SP, RHOB, NPHI, RT, etc.)
-               - Log dates and service companies
-               - Porosity, permeability, water saturation values
-               - Net-to-gross ratios, pay zone identification
-               
-            5. **DRILLING & COMPLETION DATA**:
-               - Drilling fluid types and properties
-               - Bit sizes and casing schedules
-               - Cement volumes and placement
-               - Perforation intervals and completion methods
-               
-            6. **PRODUCTION & TESTING DATA**:
-               - Flow rates (oil, gas, water)
-               - Pressure data (formation, wellhead, tubing)
-               - Test results and interpretations
-               - Production history if available
-               
-            7. **VISUAL ELEMENTS**:
-               - Charts, graphs, and curve interpretations
-               - Tables with numerical data
-               - Diagrams and schematics
-               - Annotations and handwritten notes
-            
-            Context: {context}
-            Analysis Type: {analysis_type}
-            
-            RESPONSE FORMAT:
-            Provide a comprehensive JSON-like structured analysis with:
-            - Clear categorization of all extracted data
-            - Exact values with units where applicable
-            - Confidence levels for each piece of information
-            - Relationships between different data points
-            - Any uncertainties or ambiguities noted
-            
-            Be exhaustive and precise. Extract EVERYTHING visible, no matter how small or seemingly insignificant.
-            """
-            
+You are an expert geological analyst with decades of experience in well log interpretation, formation analysis, and petroleum geology.
+
+Analyze this geological document image with EXTREME DETAIL and PRECISION. Extract EVERY piece of information visible.
+
+CRITICAL ANALYSIS REQUIREMENTS:
+
+1. **WELL IDENTIFICATION DATA**:
+   - Extract ALL well names, API numbers, permit numbers
+   - Identify operator/company names with complete details
+   - Find location information (county, state, country, coordinates)
+   - Extract lease names, section/township/range data
+
+2. **TECHNICAL WELL DATA**:
+   - Total depth (TD), measured depth (MD), true vertical depth (TVD)
+   - Spud date, completion date, first production date
+   - Well type (vertical, horizontal, deviated)
+   - Casing programs, completion details
+
+3. **FORMATION & GEOLOGICAL DATA**:
+   - Formation names and tops with exact depths
+   - Lithology descriptions and interpretations
+   - Stratigraphic correlations and sequences
+   - Geological age assignments
+
+4. **LOG & PETROPHYSICAL DATA**:
+   - Log types run (GR, SP, RHOB, NPHI, RT, etc.)
+   - Log dates and service companies
+   - Porosity, permeability, water saturation values
+   - Net-to-gross ratios, pay zone identification
+
+5. **DRILLING & COMPLETION DATA**:
+   - Drilling fluid types and properties
+   - Bit sizes and casing schedules
+   - Cement volumes and placement
+   - Perforation intervals and completion methods
+
+6. **PRODUCTION & TESTING DATA**:
+   - Flow rates (oil, gas, water)
+   - Pressure data (formation, wellhead, tubing)
+   - Test results and interpretations
+   - Production history if available
+
+7. **VISUAL ELEMENTS**:
+   - Charts, graphs, and curve interpretations
+   - Tables with numerical data
+   - Diagrams and schematics
+   - Annotations and handwritten notes
+
+Context: {context}
+Analysis Type: {analysis_type}
+
+RESPONSE FORMAT:
+Provide a comprehensive JSON-like structured analysis with:
+- Clear categorization of all extracted data
+- Exact values with units where applicable
+- Confidence levels for each piece of information
+- Relationships between different data points
+- Any uncertainties or ambiguities noted
+
+Be exhaustive and precise. Extract EVERYTHING visible, no matter how small or seemingly insignificant.
+"""
+
             response = self.groq_client.chat.completions.create(
                 model=self.vision_model,
                 messages=[{
@@ -124,82 +171,82 @@ class PureLLMFileProcessor:
                 temperature=0.05,  # Very low temperature for precision
                 max_tokens=4000    # Maximum tokens for comprehensive analysis
             )
-            
+
             return {
                 'analysis': response.choices[0].message.content,
                 'success': True,
                 'analysis_type': analysis_type
             }
-            
+
         except Exception as e:
             return {
                 'analysis': f"Advanced vision analysis failed: {str(e)}",
                 'success': False,
                 'analysis_type': analysis_type
             }
-    
+
     def llm_text_analysis(self, text_content: str, filename: str, content_type: str = "geological_document") -> Dict[str, Any]:
         """Advanced LLM text analysis for comprehensive data extraction"""
         try:
             analysis_prompt = f"""
-            You are a world-class geological data analyst and petroleum engineer with expertise in well log interpretation, formation analysis, and geological data extraction.
-            
-            Analyze the following geological document text with MAXIMUM PRECISION and extract ALL relevant information.
-            
-            Document: {filename}
-            Content Type: {content_type}
-            
-            COMPREHENSIVE EXTRACTION REQUIREMENTS:
-            
-            1. **WELL IDENTIFICATION**:
-               - Well names (all variations and aliases)
-               - API numbers and permit numbers
-               - Operator and company information
-               - Location data (coordinates, county, state, legal descriptions)
-               
-            2. **TECHNICAL SPECIFICATIONS**:
-               - Depths (total depth, measured depth, TVD)
-               - Dates (spud, completion, first production, log dates)
-               - Well trajectory and type
-               - Casing and completion details
-               
-            3. **GEOLOGICAL INFORMATION**:
-               - Formation names and stratigraphic units
-               - Formation tops with precise depths
-               - Lithological descriptions
-               - Geological age and depositional environment
-               
-            4. **PETROPHYSICAL DATA**:
-               - Log types and service companies
-               - Porosity, permeability, saturation values
-               - Net pay calculations
-               - Reservoir quality assessments
-               
-            5. **OPERATIONAL DATA**:
-               - Drilling parameters and mud properties
-               - Testing results and flow rates
-               - Production data and completion methods
-               - Equipment and service company information
-               
-            6. **QUANTITATIVE DATA**:
-               - All numerical values with proper units
-               - Ranges and intervals
-               - Calculated parameters
-               - Statistical summaries
-            
-            TEXT TO ANALYZE:
-            {text_content[:15000]}  # Limit to avoid token limits
-            
-            RESPONSE REQUIREMENTS:
-            - Provide structured, comprehensive extraction
-            - Include confidence levels for extracted data
-            - Identify relationships between data points
-            - Note any inconsistencies or ambiguities
-            - Format as clear, organized information blocks
-            
-            Extract EVERYTHING relevant with maximum detail and precision. Leave nothing behind.
-            """
-            
+You are a world-class geological data analyst and petroleum engineer with expertise in well log interpretation, formation analysis, and geological data extraction.
+
+Analyze the following geological document text with MAXIMUM PRECISION and extract ALL relevant information.
+
+Document: {filename}
+Content Type: {content_type}
+
+COMPREHENSIVE EXTRACTION REQUIREMENTS:
+
+1. **WELL IDENTIFICATION**:
+   - Well names (all variations and aliases)
+   - API numbers and permit numbers
+   - Operator and company information
+   - Location data (coordinates, county, state, legal descriptions)
+
+2. **TECHNICAL SPECIFICATIONS**:
+   - Depths (total depth, measured depth, TVD)
+   - Dates (spud, completion, first production, log dates)
+   - Well trajectory and type
+   - Casing and completion details
+
+3. **GEOLOGICAL INFORMATION**:
+   - Formation names and stratigraphic units
+   - Formation tops with precise depths
+   - Lithological descriptions
+   - Geological age and depositional environment
+
+4. **PETROPHYSICAL DATA**:
+   - Log types and service companies
+   - Porosity, permeability, saturation values
+   - Net pay calculations
+   - Reservoir quality assessments
+
+5. **OPERATIONAL DATA**:
+   - Drilling parameters and mud properties
+   - Testing results and flow rates
+   - Production data and completion methods
+   - Equipment and service company information
+
+6. **QUANTITATIVE DATA**:
+   - All numerical values with proper units
+   - Ranges and intervals
+   - Calculated parameters
+   - Statistical summaries
+
+TEXT TO ANALYZE:
+{text_content[:15000]}  # Limit to avoid token limits
+
+RESPONSE REQUIREMENTS:
+- Provide structured, comprehensive extraction
+- Include confidence levels for extracted data
+- Identify relationships between data points
+- Note any inconsistencies or ambiguities
+- Format as clear, organized information blocks
+
+Extract EVERYTHING relevant with maximum detail and precision. Leave nothing behind.
+"""
+
             response = self.groq_client.chat.completions.create(
                 model=self.text_model,
                 messages=[
@@ -208,20 +255,45 @@ class PureLLMFileProcessor:
                 temperature=0.1,
                 max_tokens=4000
             )
-            
+
             return {
                 'analysis': response.choices[0].message.content,
                 'success': True,
                 'content_type': content_type
             }
-            
+
         except Exception as e:
             return {
                 'analysis': f"LLM text analysis failed: {str(e)}",
                 'success': False,
                 'content_type': content_type
             }
-    
+
+    def safe_temp_file_cleanup(self, temp_file_path: str, max_attempts: int = 5):
+        """Safely clean up temp files with multiple attempts"""
+        if not temp_file_path or not os.path.exists(temp_file_path):
+            return
+        
+        for attempt in range(max_attempts):
+            try:
+                # Force garbage collection to release file handles
+                gc.collect()
+                time.sleep(0.1 * (attempt + 1))  # Increasing delay
+                
+                # Attempt to remove file
+                os.unlink(temp_file_path)
+                return  # Success
+                
+            except PermissionError:
+                if attempt < max_attempts - 1:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                else:
+                    st.warning(f"⚠️ Could not delete temp file after {max_attempts} attempts: {temp_file_path}")
+            except Exception as e:
+                st.warning(f"⚠️ Error deleting temp file: {e}")
+                break
+
     def process_pdf_with_heavy_vision(self, file_bytes: bytes, filename: str, force_vision: bool = True) -> Dict[str, Any]:
         """Heavy vision processing for PDFs - analyze EVERY page with vision models"""
         pdf_document = None
@@ -235,39 +307,42 @@ class PureLLMFileProcessor:
             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf', dir=Config.TEMP_DIR) as temp_file:
                 temp_file.write(file_bytes)
                 temp_file_path = temp_file.name
+                temp_file.flush()  # Ensure data is written
+                temp_file.close()  # Close file handle explicitly
             
             # Get structured text
             text_data = pymupdf4llm.to_markdown(temp_file_path)
             
-            # Clean up temp file immediately
-            if temp_file_path and os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                except:
-                    st.warning(f"Could not delete temp file: {temp_file_path}")
-            
             # LLM text analysis
             text_analysis = self.llm_text_analysis(text_data, filename, "pdf_document")
             
-            # HEAVY VISION ANALYSIS - Process EVERY page
+            # HEAVY VISION ANALYSIS - Process EVERY page with optimized resolution
             vision_analyses = []
             page_summaries = []
-            
             total_pages = len(pdf_document)
+            
             st.info(f"🔍 Performing heavy vision analysis on {total_pages} pages...")
             
             for page_num in range(total_pages):
                 try:
                     page = pdf_document.load_page(page_num)
                     
-                    # Convert page to high-quality image
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))  # High resolution
+                    # Start with lower resolution and adjust based on Groq limits
+                    matrix = fitz.Matrix(1.5, 1.5)  # Reduced from 2.0 to 1.5
+                    pix = page.get_pixmap(matrix=matrix)
+                    
+                    # Check if image is too large and reduce further if needed
+                    while pix.width * pix.height > self.MAX_PIXELS and matrix.a > 0.5:
+                        pix = None  # Release previous pixmap
+                        matrix = fitz.Matrix(matrix.a * 0.8, matrix.d * 0.8)  # Reduce by 20%
+                        pix = page.get_pixmap(matrix=matrix)
+                    
                     page_image_data = pix.tobytes("png")
-                    pix = None
+                    pix = None  # Release pixmap immediately
                     
                     # Comprehensive vision analysis for each page
                     page_analysis = self.advanced_vision_analysis(
-                        page_image_data, 
+                        page_image_data,
                         f"Page {page_num + 1} of {total_pages} from geological document {filename}",
                         "page_comprehensive"
                     )
@@ -288,7 +363,7 @@ class PureLLMFileProcessor:
                     # Progress update
                     if (page_num + 1) % 5 == 0:
                         st.info(f"Processed {page_num + 1}/{total_pages} pages with vision analysis")
-                    
+                        
                 except Exception as e:
                     st.warning(f"Error processing page {page_num + 1}: {e}")
                     vision_analyses.append({
@@ -325,87 +400,90 @@ class PureLLMFileProcessor:
             
         except Exception as e:
             return {
-                'text': f"Error processing PDF {filename}: {str(e)}", 
+                'text': f"Error processing PDF {filename}: {str(e)}",
                 'metadata': {'filename': filename, 'type': 'pdf_heavy_vision', 'error': True}
             }
+            
         finally:
+            # Clean up resources in proper order
             if pdf_document:
                 pdf_document.close()
-            if temp_file_path and os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                except:
-                    pass
+                pdf_document = None
+            
+            # Safe temp file cleanup
+            if temp_file_path:
+                self.safe_temp_file_cleanup(temp_file_path)
+            
+            # Force garbage collection
             gc.collect()
-    
+
     def synthesize_multimodal_analysis(self, text_analysis: Dict, vision_analyses: List[Dict], filename: str) -> str:
         """LLM-based synthesis of text and vision analyses"""
         try:
             # Prepare synthesis data
             text_content = text_analysis.get('analysis', 'No text analysis available')
-            
             vision_content = "\n\n".join([
-                f"Page {va['page']}: {va['analysis']}" 
+                f"Page {va['page']}: {va['analysis']}"
                 for va in vision_analyses if va['success']
             ])
-            
+
             synthesis_prompt = f"""
-            You are an expert geological analyst tasked with creating a comprehensive, unified analysis by synthesizing multiple data sources.
-            
-            You have been provided with:
-            1. Advanced text analysis of document: {filename}
-            2. Comprehensive vision analysis of all pages
-            
-            SYNTHESIS REQUIREMENTS:
-            Create a unified, comprehensive geological document analysis that:
-            
-            1. **CONSOLIDATES ALL INFORMATION** from both text and vision analyses
-            2. **RESOLVES CONFLICTS** between different sources intelligently
-            3. **FILLS GAPS** where one analysis complements the other
-            4. **STRUCTURES INFORMATION** in a logical, hierarchical format
-            5. **MAINTAINS PRECISION** of all technical data and measurements
-            
-            TEXT ANALYSIS RESULTS:
-            {text_content}
-            
-            VISION ANALYSIS RESULTS:
-            {vision_content}
-            
-            FINAL SYNTHESIS FORMAT:
-            Create a comprehensive document that includes:
-            
-            # GEOLOGICAL DOCUMENT ANALYSIS: {filename}
-            
-            ## EXECUTIVE SUMMARY
-            [Brief overview of the document and key findings]
-            
-            ## WELL IDENTIFICATION
-            [All well identifiers, names, API numbers, locations]
-            
-            ## TECHNICAL SPECIFICATIONS
-            [Depths, dates, well type, completion details]
-            
-            ## GEOLOGICAL DATA
-            [Formations, lithology, stratigraphy, age]
-            
-            ## PETROPHYSICAL ANALYSIS
-            [Logs, porosity, permeability, saturation, net pay]
-            
-            ## OPERATIONAL INFORMATION
-            [Drilling, completion, testing, production]
-            
-            ## QUANTITATIVE DATA SUMMARY
-            [All numerical values, ranges, calculations]
-            
-            ## VISUAL ELEMENTS INTERPRETATION
-            [Charts, graphs, diagrams, tables from vision analysis]
-            
-            ## INTEGRATED CONCLUSIONS
-            [Key insights from combined text and vision analysis]
-            
-            Be exhaustive, precise, and comprehensive. This should be the definitive analysis of this geological document.
-            """
-            
+You are an expert geological analyst tasked with creating a comprehensive, unified analysis by synthesizing multiple data sources.
+
+You have been provided with:
+1. Advanced text analysis of document: {filename}
+2. Comprehensive vision analysis of all pages
+
+SYNTHESIS REQUIREMENTS:
+Create a unified, comprehensive geological document analysis that:
+
+1. **CONSOLIDATES ALL INFORMATION** from both text and vision analyses
+2. **RESOLVES CONFLICTS** between different sources intelligently
+3. **FILLS GAPS** where one analysis complements the other
+4. **STRUCTURES INFORMATION** in a logical, hierarchical format
+5. **MAINTAINS PRECISION** of all technical data and measurements
+
+TEXT ANALYSIS RESULTS:
+{text_content}
+
+VISION ANALYSIS RESULTS:
+{vision_content}
+
+FINAL SYNTHESIS FORMAT:
+Create a comprehensive document that includes:
+
+# GEOLOGICAL DOCUMENT ANALYSIS: {filename}
+
+## EXECUTIVE SUMMARY
+[Brief overview of the document and key findings]
+
+## WELL IDENTIFICATION
+[All well identifiers, names, API numbers, locations]
+
+## TECHNICAL SPECIFICATIONS
+[Depths, dates, well type, completion details]
+
+## GEOLOGICAL DATA
+[Formations, lithology, stratigraphy, age]
+
+## PETROPHYSICAL ANALYSIS
+[Logs, porosity, permeability, saturation, net pay]
+
+## OPERATIONAL INFORMATION
+[Drilling, completion, testing, production]
+
+## QUANTITATIVE DATA SUMMARY
+[All numerical values, ranges, calculations]
+
+## VISUAL ELEMENTS INTERPRETATION
+[Charts, graphs, diagrams, tables from vision analysis]
+
+## INTEGRATED CONCLUSIONS
+[Key insights from combined text and vision analysis]
+
+Be exhaustive, precise, and comprehensive. This should be the definitive analysis of this geological document.
+"""
+
             response = self.groq_client.chat.completions.create(
                 model=self.text_model,
                 messages=[
@@ -414,24 +492,24 @@ class PureLLMFileProcessor:
                 temperature=0.1,
                 max_tokens=4000
             )
-            
+
             return response.choices[0].message.content
-            
+
         except Exception as e:
             # Fallback synthesis
             return f"""
-            # GEOLOGICAL DOCUMENT ANALYSIS: {filename}
-            
-            ## TEXT ANALYSIS:
-            {text_analysis.get('analysis', 'Text analysis failed')}
-            
-            ## VISION ANALYSIS:
-            {vision_content if 'vision_content' in locals() else 'Vision analysis compilation failed'}
-            
-            ## SYNTHESIS ERROR:
-            LLM synthesis failed: {str(e)}
-            """
-    
+# GEOLOGICAL DOCUMENT ANALYSIS: {filename}
+
+## TEXT ANALYSIS:
+{text_analysis.get('analysis', 'Text analysis failed')}
+
+## VISION ANALYSIS:
+{vision_content if 'vision_content' in locals() else 'Vision analysis compilation failed'}
+
+## SYNTHESIS ERROR:
+LLM synthesis failed: {str(e)}
+"""
+
     def process_csv_with_llm(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         """LLM-based CSV analysis"""
         try:
@@ -458,14 +536,14 @@ class PureLLMFileProcessor:
                     'analysis_method': 'pure_llm'
                 }
             }
+            
         except Exception as e:
             return {'text': f"Error processing CSV {filename}: {str(e)}", 'metadata': {'filename': filename, 'type': 'csv', 'error': True}}
-    
+
     def process_excel_with_llm(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         """LLM-based Excel analysis"""
         try:
             excel_file = pd.ExcelFile(BytesIO(file_bytes))
-            
             excel_text = f"Excel File: {filename}\n\nSheets: {', '.join(excel_file.sheet_names)}\n\n"
             
             for sheet_name in excel_file.sheet_names:
@@ -485,9 +563,10 @@ class PureLLMFileProcessor:
                     'analysis_method': 'pure_llm'
                 }
             }
+            
         except Exception as e:
             return {'text': f"Error processing Excel {filename}: {str(e)}", 'metadata': {'filename': filename, 'type': 'excel', 'error': True}}
-    
+
     def process_text_with_llm(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         """LLM-based text analysis"""
         try:
@@ -504,9 +583,10 @@ class PureLLMFileProcessor:
                     'analysis_method': 'pure_llm'
                 }
             }
+            
         except Exception as e:
             return {'text': f"Error processing text {filename}: {str(e)}", 'metadata': {'filename': filename, 'type': 'text', 'error': True}}
-    
+
     def process_docx_with_llm(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         """LLM-based DOCX analysis"""
         try:
@@ -529,9 +609,10 @@ class PureLLMFileProcessor:
                     'analysis_method': 'pure_llm'
                 }
             }
+            
         except Exception as e:
             return {'text': f"Error processing DOCX {filename}: {str(e)}", 'metadata': {'filename': filename, 'type': 'docx', 'error': True}}
-    
+
     def process_las_with_llm(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         """LLM-based LAS file analysis"""
         try:
@@ -548,9 +629,10 @@ class PureLLMFileProcessor:
                     'has_geological_data': True
                 }
             }
+            
         except Exception as e:
             return {'text': f"Error processing LAS {filename}: {str(e)}", 'metadata': {'filename': filename, 'type': 'las', 'error': True}}
-    
+
     def process_image_with_vision(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         """Heavy vision analysis for images"""
         try:
@@ -558,7 +640,7 @@ class PureLLMFileProcessor:
             
             # Comprehensive vision analysis
             vision_analysis = self.advanced_vision_analysis(
-                file_bytes, 
+                file_bytes,
                 f"Geological image file: {filename}",
                 "comprehensive_image"
             )
@@ -574,9 +656,10 @@ class PureLLMFileProcessor:
                     'analysis_method': 'advanced_vision_llm'
                 }
             }
+            
         except Exception as e:
             return {'text': f"Error processing image {filename}: {str(e)}", 'metadata': {'filename': filename, 'type': 'image', 'error': True}}
-    
+
     def process_tiff_with_vision(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         """Heavy vision analysis for TIFF images"""
         try:
@@ -593,7 +676,7 @@ class PureLLMFileProcessor:
             
             # Comprehensive vision analysis
             vision_analysis = self.advanced_vision_analysis(
-                png_bytes, 
+                png_bytes,
                 f"TIFF geological image: {filename}",
                 "comprehensive_tiff"
             )
@@ -609,9 +692,10 @@ class PureLLMFileProcessor:
                     'analysis_method': 'advanced_vision_llm'
                 }
             }
+            
         except Exception as e:
             return {'text': f"Error processing TIFF {filename}: {str(e)}", 'metadata': {'filename': filename, 'type': 'tiff', 'error': True}}
-    
+
     def process_file(self, uploaded_file, force_vision: bool = True) -> Dict[str, Any]:
         """Process uploaded file with pure LLM approach"""
         filename = uploaded_file.name

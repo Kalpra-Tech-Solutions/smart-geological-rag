@@ -9,6 +9,7 @@ import os
 import pickle
 from datetime import datetime
 
+
 class AdvancedEmbeddingStore:
     """Advanced embedding store with hybrid search capabilities"""
     
@@ -403,3 +404,64 @@ class AdvancedGeologicalRAGSystem:
             }
         
         return results
+class PureLLMRAGSystem:
+    def __init__(self, groq_api_key: str, model_name: str):
+        # ... existing initialization code ...
+        self.response_formatter = ResponseFormatter()
+    
+    def process_query(self, query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
+        """Process user query with enhanced response formatting"""
+        try:
+            # Reset confidence counter for new response
+            self.response_formatter.reset_confidence_counter()
+            
+            # ... existing query processing code ...
+            
+            # Get raw response from your LLM
+            raw_response = self.generate_response(enhanced_context, query, conversation_history)
+            
+            # Format the response with conclusion and filtering
+            formatted_response = self.response_formatter.format_response(
+                raw_response, 
+                filename="", 
+                include_conclusion=True
+            )
+            
+            return {
+                'response': formatted_response,
+                'sources': sources,
+                'confidence': confidence_score,
+                'processing_time': time.time() - start_time
+            }
+            
+        except Exception as e:
+            return {
+                'response': f"Error processing query: {str(e)}",
+                'sources': [],
+                'confidence': 0.0,
+                'processing_time': 0.0
+            }
+
+    def generate_response(self, context: str, query: str, conversation_history: List[Dict] = None) -> str:
+        """Generate response with improved prompting for better formatting"""
+        
+        system_prompt = """
+You are an expert geological analyst. Provide comprehensive, well-structured responses.
+
+RESPONSE FORMATTING REQUIREMENTS:
+- Use clear headings and subheadings
+- Present key information in bullet points
+- Include only ONE confidence statement per response
+- Focus on factual analysis without excessive reasoning explanations
+- Structure responses logically with clear sections
+
+AVOID:
+- Showing your thinking process or reasoning steps
+- Multiple confidence statements
+- Verbose explanations of your analysis approach
+- Unnecessary hedging or uncertainty markers
+"""
+
+        # ... rest of your response generation logic ...
+        
+        return response_content
