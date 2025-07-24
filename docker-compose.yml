@@ -1,16 +1,27 @@
 version: '3.8'
+
 services:
-  app:
+  smart-geological-rag:
     build: .
+    container_name: smart-geological-rag-app
     ports:
       - "8501:8501"
-    volumes:
-      - ./data:/app/data
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY}
+      - LANCEDB_URI=/app/data/geological_rag_db
+      - STREAMLIT_HOST=0.0.0.0
+      - STREAMLIT_PORT=8501
+    volumes:
+      - ./data:/app/data
+      - ./temp:/app/temp
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+networks:
+  default:
+    name: smart-rag-network
